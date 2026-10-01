@@ -1,0 +1,31 @@
+# Secret & cấu hình cục bộ
+.env
+.env.*
+!.env.example
+*-key.json
+*_key.json
+*.key
+*.pem
+service-account*.json
+credentials*.json
+
+# Dữ liệu — repo này là PUBLIC, không bao giờ commit dữ liệu
+*.xlsx
+*.xls
+*.csv
+*.docx
+*.ndjson
+temp_*
+logs/
+*.log
+web_app/
+cache_*.json
+sync_status.json
+
+# Python / dbt
+__pycache__/
+*.pyc
+.pytest_cache/
+office_transform/target/
+office_transform/dbt_packages/
+office_transform/logs/

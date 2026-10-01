@@ -1,0 +1,9 @@
+#!/bin/sh
+# Chặn commit chứa secret viết cứng. Bật: git config core.hooksPath .githooks
+# (Windows: "python3" có thể là stub của Microsoft Store → ưu tiên "python")
+if command -v python >/dev/null 2>&1; then
+    PY=python
+else
+    PY=python3
+fi
+exec "$PY" "$(git rev-parse --show-toplevel)/check_secrets.py"

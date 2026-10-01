@@ -1,0 +1,75 @@
+version: 2
+
+sources:
+  - name: dwh_1office
+    description: |
+      Toàn bộ dữ liệu thô (RAW layer) được sync từ 1Office API và các nguồn bên ngoài.
+      Database: DWH_1OFFICE, Schema: RAW.
+    database: "{{ env_var('GCP_PROJECT_ID') }}"
+    schema: "DWH_1OFFICE"
+
+    # ✅ Task 2.5: Freshness check tự động
+    # Chạy bằng: dbt source freshness
+    # Cảnh báo nếu data > 25h không được update (ngưỡng an toàn cho pipeline chạy hàng ngày)
+    freshness:
+      warn_after:  {count: 25, period: hour}
+      error_after: {count: 49, period: hour}
+
+    tables:
+
+      - name: raw_1office_profile
+        identifier: RAW_1OFFICE_PROFILE
+        description: |
+          Hồ sơ nhân viên từ 1Office API (personnel/profile/gets).
+          Mỗi row chứa 1 JSON array gồm ~500 profiles.
+          Sync: Full-load hàng ngày (TRUNCATE + INSERT).
+        loaded_at_field: SYNC_TIME
+
+      - name: raw_1office_approvals_list
+        identifier: RAW_1OFFICE_APPROVALS_LIST
+        description: |
+          Danh sách tất cả đơn từ (approval/approval/gets).
+          Mỗi row chứa 1 JSON chunk 1000 đơn.
+          Sync: Full-load hàng ngày (TRUNCATE + INSERT).
+        loaded_at_field: SYNC_TIME
+
+      - name: raw_1office_approval_details
+        identifier: RAW_1OFFICE_APPROVAL_DETAILS
+        description: |
+          Chi tiết từng đơn từ (approval/approval/item).
+          Mỗi row = 1 đơn từ cụ thể với sub-arrays nội dung.
+          Sync: Incremental — chỉ tải những đơn còn thiếu.
+        # ⚠️  Không có SYNC_TIME trong bảng này → cần thêm vào khi INSERT
+        # loaded_at_field: SYNC_TIME  ← Uncomment sau khi thêm SYNC_TIME vào bảng
+
+      - name: raw_hr_master_data
+        identifier: RAW_HR_MASTER_DATA
+        description: |
+          Dữ liệu nhân sự bổ sung từ file Excel Master_Data_HR.xlsx.
+          Bao gồm thông tin lương, ngày ký hợp đồng, khu vực mà 1Office API không có.
+          Sync: Manual upload — không check freshness tự động.
+        freshness: null  # Upload thủ công, không có SYNC_TIME đáng tin cậy
+
+      - name: raw_1office_timekeep_list
+        identifier: RAW_1OFFICE_TIMEKEEP_LIST
+        description: |
+          Dữ liệu chấm công theo ngày (timekeep/attendancedetailday/gets).
+          Mỗi row = 1 ngày x toàn bộ nhân viên, gói trong JSON array.
+          Sync: Incremental từ đầu tháng hiện tại (DELETE + INSERT).
+        loaded_at_field: SYNC_TIME
+
+      - name: raw_department_region_mapping
+        identifier: RAW_DEPARTMENT_REGION_MAPPING
+        description: |
+          Bảng mapping phòng ban → khu vực địa lý.
+          Static lookup table, hiếm khi thay đổi.
+        freshness: null  # Static table, không check freshness
+
+      - name: raw_exception_status_tracking
+        identifier: RAW_EXCEPTION_STATUS_TRACKING
+        description: |
+          Trạng thái xử lý case ngoại lệ (mục 14 BRD Dashboard Kiểm soát Lịch nghỉ/Đơn từ).
+          Do HR/KSNB điền tay trong Exception_Status_Tracking.xlsx — không có nguồn tự động.
+          Khóa: MA_CASE = MA_NV + "_" + NGAY (yyyymmdd), khớp với mart_compliance_exception_detail.
+          Sync: Manual upload — không check freshness tự động.
+        freshness: null  # Upload thủ công, không có SYNC_TIME đáng tin cậy

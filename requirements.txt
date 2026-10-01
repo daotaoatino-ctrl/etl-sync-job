@@ -1,0 +1,6 @@
+# Chỉ những gói mà luồng sync thực sự dùng
+requests>=2.31.0
+python-dotenv>=1.0.0
+tenacity>=8.2.0
+google-cloud-bigquery>=3.20.0
+dbt-bigquery>=1.7

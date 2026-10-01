@@ -1,0 +1,142 @@
+version: 2
+
+models:
+  # ============================================================
+  # STG_PROFILES — Hồ sơ nhân viên
+  # ============================================================
+  - name: stg_profiles
+    description: |
+      Hồ sơ nhân viên được flatten từ JSON thô của 1Office API.
+      Mỗi row = 1 nhân viên, đã dedup bằng sync_time mới nhất.
+      Source: RAW.RAW_1OFFICE_PROFILE
+    columns:
+      - name: id
+        description: "ID nội bộ của 1Office (integer). Primary identifier."
+        tests:
+          - not_null
+          - unique
+      - name: code
+        description: "Mã nhân viên (VD: NV001, CH-001). Business key."
+        tests:
+          - not_null
+      - name: name
+        description: "Họ tên đầy đủ của nhân viên."
+        tests:
+          - not_null
+      - name: gender
+        description: "Giới tính: 'Nam' hoặc 'Nữ'. NULL nếu chưa cập nhật."
+      - name: job_status
+        description: "Trạng thái: 'Đang làm việc', 'Thử việc', 'Thực tập', 'Đã nghỉ việc'..."
+      - name: department_full
+        description: "Tên phòng ban đầy đủ từ 1Office."
+      - name: salary_real
+        description: "Lương thực nhận (VND). PII — chỉ HR_ADMIN mới được xem."
+      - name: birthday
+        description: "Ngày sinh (DATE). NULL nếu không điền hoặc format sai."
+      - name: job_date_join
+        description: "Ngày vào làm chính thức (DATE)."
+      - name: job_date_out
+        description: "Ngày nghỉ việc (DATE). NULL nếu đang làm việc."
+
+  # ============================================================
+  # STG_APPROVALS — Danh sách đơn từ
+  # ============================================================
+  - name: stg_approvals
+    description: |
+      Danh sách tất cả đơn từ, flatten từ RAW_1OFFICE_APPROVALS_LIST.
+      Mỗi row = 1 đơn từ. Dedup bằng sync_time mới nhất.
+    columns:
+      - name: id
+        description: "ID đơn từ từ 1Office."
+        tests:
+          - not_null
+          - unique
+      - name: personnel_code
+        description: "Mã nhân viên tạo đơn. Foreign key → stg_profiles.code."
+        tests:
+          - not_null
+      - name: app_approval_status
+        description: "Trạng thái phê duyệt đơn."
+        tests:
+          - accepted_values:
+              values: ['Đã duyệt', 'Chờ duyệt', 'Từ chối', 'Đã hủy', 'Chưa duyệt', 'Không duyệt']
+      - name: date_created
+        description: "Ngày tạo đơn (DATE)."
+      - name: date_approve
+        description: "Ngày phê duyệt (DATE). NULL nếu chưa được duyệt."
+
+  # ============================================================
+  # STG_APPROVAL_DETAILS — Chi tiết từng đơn từ
+  # ============================================================
+  - name: stg_approval_details
+    description: |
+      Chi tiết từng đơn từ (nội dung thực tế: giờ OT, ngày nghỉ, lý do...).
+      Mỗi row = 1 đơn từ, với sub-arrays (inout, overtime, leave, absence) dưới dạng VARIANT.
+    columns:
+      - name: id
+        description: "ID đơn từ. Foreign key → stg_approvals.id."
+        tests:
+          - not_null
+          - unique
+      - name: personnel_code
+        description: "Mã nhân viên."
+        tests:
+          - not_null
+
+  # ============================================================
+  # STG_TIMEKEEP — Chấm công hàng ngày
+  # ============================================================
+  - name: stg_timekeep
+    description: |
+      Dữ liệu chấm công theo ngày, flatten từ RAW_1OFFICE_TIMEKEEP_LIST.
+      Mỗi row = 1 nhân viên × 1 ngày. Dedup giữ bản ghi mới nhất.
+    columns:
+      - name: personnel_code
+        description: "Mã nhân viên. Foreign key → stg_profiles.code."
+        tests:
+          - not_null
+      - name: attendance_date
+        description: "Ngày chấm công (STRING format YYYY-MM-DD)."
+        tests:
+          - not_null
+      - name: cal_workhour
+        description: "Số giờ công tính được trong ngày."
+      - name: workhour_overtime
+        description: "Số giờ tăng ca trong ngày."
+      - name: late_minute
+        description: "Số phút đi muộn (0 nếu không đi muộn)."
+
+  # ============================================================
+  # STG_HR_MASTER_DATA — Dữ liệu HR từ Excel
+  # ============================================================
+  - name: stg_hr_master_data
+    description: |
+      Dữ liệu nhân sự bổ sung từ file Excel Master_Data_HR.xlsx.
+      Chứa thông tin lương, ngày ký hợp đồng mà 1Office API không có.
+    columns:
+      - name: personnel_code
+        description: "Mã nhân viên. Dùng để JOIN với stg_profiles.code."
+        tests:
+          - not_null
+          - unique
+
+  # ============================================================
+  # INT_APPROVAL_DETAILS_FLAT — Intermediate model
+  # ============================================================
+  - name: int_approval_details_flat
+    description: |
+      Intermediate model: flatten từng loại sub-array (overtime/inout/absence/leave).
+      Mỗi row = 1 event chi tiết (1 ngày OT, 1 lần check-in, 1 ngày nghỉ...).
+    columns:
+      - name: approval_id
+        description: "ID đơn từ cha. Foreign key → stg_approval_details.id."
+        tests:
+          - not_null
+      - name: detail_type
+        description: "Loại chi tiết: 'overtime', 'inout', 'absence', 'leave'."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['overtime', 'inout', 'absence', 'leave']
+      - name: date_record
+        description: "Ngày của event (DATE)."

@@ -1,0 +1,15 @@
+# Ví dụ profile dbt cho chạy cục bộ (đặt tại ~/.dbt/profiles.yml).
+# Workflow GitHub Actions tự tạo profile này từ secret — không cần file này trên CI.
+office_transform:
+  target: prod
+  outputs:
+    prod:
+      type: bigquery
+      method: service-account
+      project: <GCP_PROJECT_ID>
+      dataset: DWH_1OFFICE
+      threads: 4
+      keyfile: <đường dẫn tới file key service account>
+      timeout_seconds: 300
+      location: US
+      priority: interactive

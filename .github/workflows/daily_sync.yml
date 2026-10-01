@@ -1,0 +1,113 @@
+name: Daily 1Office sync
+
+on:
+  schedule:
+    # 05:00 giờ Việt Nam (22:00 UTC hôm trước). GitHub có thể trễ tới ~1 giờ,
+    # một lần sync mất ~15 phút → xong trước 07:30.
+    - cron: '0 22 * * *'
+  workflow_dispatch: # Chạy tay: Actions → Daily 1Office sync → Run workflow
+
+permissions:
+  contents: write # chỉ dùng cho bước "giữ repo hoạt động" ở cuối
+
+# Không cho 2 lần sync chạy chồng nhau (ghi WRITE_TRUNCATE vào RAW/MART).
+concurrency:
+  group: daily-1office-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: 1Office → BigQuery → dbt
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      # Repo PUBLIC → log công khai. Mọi giá trị nhạy cảm đều là secret (GitHub tự che trong log).
+      OFFICE_ACCESS_TOKEN: ${{ secrets.OFFICE_ACCESS_TOKEN }}
+      OFFICE_API_BASE_URL: ${{ secrets.OFFICE_API_BASE_URL }}
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_DATASET_ID: DWH_1OFFICE
+      PYTHONUTF8: '1'
+
+    steps:
+      - name: Kiểm tra secret
+        env:
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+        run: |
+          missing=0
+          for v in OFFICE_ACCESS_TOKEN OFFICE_API_BASE_URL GCP_PROJECT_ID GCP_SERVICE_ACCOUNT_JSON; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Thiếu secret $v (Settings → Secrets and variables → Actions)"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Che tên miền 1Office trong log
+        # GitHub chỉ che NGUYÊN giá trị secret; thông báo lỗi của requests lại in riêng tên miền.
+        run: |
+          host=$(python3 -c "import os; from urllib.parse import urlparse; print(urlparse(os.environ['OFFICE_API_BASE_URL']).hostname or '')")
+          if [ -n "$host" ]; then echo "::add-mask::$host"; fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Cài thư viện
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ghi key BigQuery (tạm thời)
+        env:
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+        run: |
+          umask 077
+          printf '%s' "$GCP_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/gcp-key.json"
+          echo "GCP_KEY_PATH=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/gcp-key.json" >> "$GITHUB_ENV"
+
+      - name: Cấu hình dbt
+        run: |
+          mkdir -p "$HOME/.dbt"
+          cat > "$HOME/.dbt/profiles.yml" <<EOF
+          office_transform:
+            target: prod
+            outputs:
+              prod:
+                type: bigquery
+                method: service-account
+                project: ${GCP_PROJECT_ID}
+                dataset: DWH_1OFFICE
+                threads: 4
+                keyfile: ${GCP_KEY_PATH}
+                timeout_seconds: 300
+                location: US
+                priority: interactive
+          EOF
+          cd office_transform
+          dbt deps --profiles-dir "$HOME/.dbt"
+
+      - name: Chạy sync
+        run: python daily_morning_sync.py
+
+      - name: Xoá key BigQuery
+        if: always()
+        run: rm -f "$RUNNER_TEMP/gcp-key.json" "$HOME/.dbt/profiles.yml"
+
+      - name: Giữ repo hoạt động
+        # GitHub tự tắt workflow hẹn giờ của repo public sau 60 ngày không có hoạt động.
+        # Nếu commit cuối đã quá 45 ngày thì tạo 1 commit rỗng.
+        if: ${{ !cancelled() }}
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $(( (now - last) / 86400 )) -ge 45 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore: keepalive (tránh GitHub tắt lịch chạy sau 60 ngày)"
+            git push
+          fi

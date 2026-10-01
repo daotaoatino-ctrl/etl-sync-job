@@ -1,0 +1,56 @@
+
+# Name your project! Project names should contain only lowercase characters
+# and underscores. A good package name should reflect your organization's
+# name or the intended use of these models
+name: 'office_transform'
+version: '1.0.0'
+
+# This setting configures which "profile" dbt uses for this project.
+profile: 'office_transform'
+
+# These configurations specify where dbt should look for different types of files.
+# The `model-paths` config, for example, states that models in this project can be
+# found in the "models/" directory. You probably won't need to change these!
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:         # directories to be removed by `dbt clean`
+  - "target"
+  - "dbt_packages"
+
+
+# Configuring models
+# Full documentation: https://docs.getdbt.com/docs/configuring-models
+
+# In this example config, we tell dbt to build all models in the example/
+# directory as views. These settings can be overridden in the individual model
+# files using the `{{ config(...) }}` macro.
+models:
+  office_transform:
+      +materialized: view
+      marts:
+          +schema: MART
+          +materialized: table
+      staging:
+          +schema: STG
+      intermediate:
+          +schema: STG
+
+# ============================================================
+# Ngưỡng cấu hình cho logic ngoại lệ Dashboard Kiểm soát Lịch nghỉ/Đơn từ
+# (BRD mục 4, 10, 19 khuyến nghị: nên để có thể điều chỉnh sau khi chạy thử
+#  thực tế 2-4 tuần, thay vì cố định cứng trong code)
+# ============================================================
+vars:
+  compliance_backoffice_dept_groups: ['Khối Văn phòng', 'Khối Kho', 'Khối Sản xuất']
+  compliance_sat_gio_threshold_minutes: 60   # "Xin nghỉ sát giờ": tạo đơn trước giờ nghỉ < X phút
+  compliance_qua_han_cho_duyet_days: 3       # "Đơn tồn chờ duyệt quá hạn": còn Chờ duyệt quá X ngày kể từ ngày tạo
+
+  # ⚠️ Cấu hình lịch làm việc luân phiên 2 tuần cho Khối Văn phòng:
+  # Tuần 31/08/2026 (Thứ 2) là tuần 6 ngày (T2-T7, T7 05/09 đi làm).
+  # Tuần 07/09/2026 (Thứ 2) là tuần 5 ngày (T2-T6, T7 12/09 nghỉ luân phiên).
+  compliance_six_day_week_anchor_monday: '2026-08-31'

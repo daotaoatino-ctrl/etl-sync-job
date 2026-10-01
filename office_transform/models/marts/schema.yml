@@ -1,0 +1,226 @@
+version: 2
+
+models:
+  # ============================================================
+  # MART_PROFILES — Bảng nhân viên (Dimension)
+  # ============================================================
+  - name: mart_profiles
+    description: |
+      Bảng chính về nhân viên cho Power BI.
+      Bao gồm nhân viên hiện tại + nhân viên đã nghỉ + nhân viên chỉ có đơn từ.
+      1 row = 1 nhân viên.
+    columns:
+      - name: personnel_code
+        description: "Mã nhân viên. Business key. Unique trong bảng này."
+        tests:
+          - not_null
+          - unique
+      - name: name
+        description: "Họ tên đầy đủ."
+        tests:
+          - not_null
+      - name: is_active
+        description: "TRUE = đang làm việc (Đang làm/Thử việc/Thực tập). FALSE = đã nghỉ."
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+              quote: false
+      - name: department
+        description: "Tên phòng ban đầy đủ."
+      - name: department_group
+        description: "Nhóm phòng ban: 'Khối Cửa hàng', 'Khối Kho', 'Khối Sản xuất', 'Khối Văn phòng', 'Chưa phân bổ'."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Khối Cửa hàng', 'Khối Kho', 'Khối Sản xuất', 'Khối Văn phòng', 'Chưa phân bổ']
+      - name: gender
+        description: "Giới tính: 'Nam', 'Nữ', hoặc 'Chưa cập nhật'."
+      - name: age
+        description: "Tuổi hiện tại (số nguyên, tính từ birthday đến CURRENT_DATE). NULL nếu không có birthday."
+      - name: tenure_months
+        description: "Thâm niên tính bằng tháng. NULL nếu không có job_date_join."
+
+  # ============================================================
+  # MART_APPROVALS — Bảng đơn từ (Fact)
+  # ============================================================
+  - name: mart_approvals
+    description: |
+      Bảng đơn từ đã flatten đầy đủ cho Power BI.
+      1 row = 1 event (1 ngày OT, 1 lần check-in, 1 ngày nghỉ phép, 1 lần vắng).
+      Grain: approval_id + approval_type + date_record.
+    columns:
+      - name: approval_id
+        description: "ID đơn từ từ 1Office. Có thể có nhiều rows cùng approval_id (nhiều ngày)."
+        tests:
+          - not_null
+      - name: approval_type
+        description: "Loại đơn từ."
+        tests:
+          - not_null
+          - accepted_values:
+              # ⚠️ Sửa 28/08/2026: danh sách cũ (Đơn nghỉ phép/Đơn vắng) không khớp
+              # với logic CASE WHEN thực tế trong mart_approvals.sql (test đã fail
+              # từ trước, không liên quan tới compliance marts thêm trong phiên này).
+              # ⚠️ Sửa 16/09/2026: bổ sung 'Đơn khác' — đây là nhánh ELSE hợp lệ của
+              # CASE trong mart_approvals.sql (dòng ~234) cho các loại đơn 1Office
+              # chưa có từ khoá nhận diện (vd. đổi ca), không phải giá trị lỗi.
+              values: ['Đơn làm thêm', 'Đơn checkin/out', 'Đơn xin nghỉ', 'Đơn vắng mặt', 'Đơn công tác', 'Đơn thôi việc', 'Đơn khác']
+      - name: personnel_code
+        description: "Mã nhân viên tạo đơn. Foreign key → mart_profiles.personnel_code."
+        tests:
+          - not_null
+      - name: approval_status
+        description: "Trạng thái phê duyệt."
+        tests:
+          - not_null
+      - name: hours_amount
+        description: "Số giờ OT/nghỉ. NULL với đơn checkin."
+
+  # ============================================================
+  # MART_ATTENDANCE_EVENTS — Chấm công (Fact)
+  # ============================================================
+  - name: mart_attendance_events
+    description: |
+      Bảng sự kiện chấm công hàng ngày cho Power BI.
+      1 row = 1 nhân viên × 1 ngày.
+    columns:
+      - name: personnel_code
+        description: "Mã nhân viên. Foreign key → mart_profiles.personnel_code."
+        tests:
+          - not_null
+      - name: event_date
+        description: "Ngày chấm công."
+        tests:
+          - not_null
+
+  # ============================================================
+  # MART_EMPLOYEE_EVENTS — Tuyển dụng & Nghỉ việc (Fact)
+  # ============================================================
+  - name: mart_employee_events
+    description: |
+      Bảng sự kiện tuyển dụng và nghỉ việc.
+      1 row = 1 event (1 lần tuyển hoặc 1 lần nghỉ).
+    columns:
+      - name: personnel_code
+        description: "Mã nhân viên."
+        tests:
+          - not_null
+      - name: event_type
+        description: "Loại sự kiện: 'Tuyển mới' hoặc 'Nghỉ việc'."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Tuyển mới', 'Nghỉ việc']
+      - name: event_date
+        description: "Ngày tuyển hoặc ngày nghỉ việc."
+        tests:
+          - not_null
+
+  # ============================================================
+  # MART_HEADCOUNT_SNAPSHOT — Headcount hiện tại (Aggregate)
+  # ============================================================
+  - name: mart_headcount_snapshot
+    description: |
+      Snapshot headcount theo tháng, phòng ban và chức danh.
+      1 row = 1 tháng × 1 phòng ban × 1 chức danh.
+    columns:
+      - name: snapshot_month
+        description: "Tháng của snapshot (DATE, ngày 1 của tháng)."
+        tests:
+          - not_null
+      - name: total_employees
+        description: "Tổng số nhân viên (bao gồm cả inactive)."
+        tests:
+          - not_null
+      - name: active_employees
+        description: "Số nhân viên đang làm việc trong tháng."
+        tests:
+          - not_null
+
+  # ============================================================
+  # MART_COMPLIANCE_SCHEDULE_DAILY — Đối chiếu lịch/chấm công/đơn (Fact)
+  # Dashboard Kiểm soát Lịch nghỉ/Đơn từ — Phạm vi Khối Backoffice
+  # ============================================================
+  - name: mart_compliance_schedule_daily
+    description: |
+      Đối chiếu Lịch chuẩn (proxy) x Chấm công x Đơn từ theo ngày.
+      1 row = 1 nhân sự backoffice x 1 ngày (60 ngày gần nhất).
+    columns:
+      - name: personnel_code
+        description: "Mã nhân viên. Foreign key → mart_profiles.personnel_code."
+        tests:
+          - not_null
+      - name: schedule_date
+        description: "Ngày trong lịch chuẩn."
+        tests:
+          - not_null
+      - name: exception_type
+        description: "Loại ngoại lệ theo BRD mục 7 (Bình thường / Vắng không phép / Nghỉ sai quy định...)."
+        tests:
+          - not_null
+      - name: severity_level
+        description: "Mức độ cảnh báo theo BRD mục 15."
+        tests:
+          - accepted_values:
+              values: ['Cao', 'Trung bình', 'Thấp']
+              quote: true
+              config:
+                where: "severity_level is not null"
+
+  # ============================================================
+  # MART_COMPLIANCE_APPROVAL_TIMING — Thời điểm tạo/duyệt đơn (Fact)
+  # ============================================================
+  - name: mart_compliance_approval_timing
+    description: |
+      Logic kiểm soát thời điểm tạo và duyệt đơn — BRD mục 4.
+      1 row = 1 đơn nghỉ/vắng x 1 ngày nghỉ cụ thể.
+    columns:
+      - name: approval_id
+        description: "ID đơn từ 1Office. Foreign key → mart_approvals.approval_id."
+        tests:
+          - not_null
+      - name: personnel_code
+        tests:
+          - not_null
+
+  # ============================================================
+  # MART_COMPLIANCE_EXCEPTION_DETAIL — Bảng chi tiết ngoại lệ (Fact)
+  # ============================================================
+  - name: mart_compliance_exception_detail
+    description: |
+      Bảng chi tiết ngoại lệ cho Power BI — BRD mục 14.
+      1 row = 1 nhân sự backoffice x 1 ngày (+ mở rộng theo từng đơn nếu có nhiều đơn/ngày).
+    columns:
+      - name: personnel_code
+        tests:
+          - not_null
+      - name: exception_date
+        tests:
+          - not_null
+      - name: case_id
+        description: "Khóa đối chiếu với Exception_Status_Tracking.xlsx (MA_NV_YYYYMMDD)."
+        tests:
+          - not_null
+
+  # ============================================================
+  # DIM_DATE — Bảng lịch (Dimension)
+  # ============================================================
+  - name: dim_date
+    description: |
+      Bảng lịch từ 2020 đến 2030.
+      1 row = 1 ngày. Dùng để JOIN với fact tables trong Power BI.
+    columns:
+      - name: date
+        description: "Ngày (DATE). Primary key của bảng lịch."
+        tests:
+          - not_null
+          - unique
+      - name: year
+        description: "Năm (INT, VD: 2026)."
+        tests:
+          - not_null
+      - name: is_weekday
+        description: "TRUE nếu là ngày làm việc (Thứ 2-6), FALSE nếu là T7/CN."
+        tests:
+          - not_null
