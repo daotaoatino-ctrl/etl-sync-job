@@ -6,6 +6,11 @@ on:
     # một lần sync mất ~15 phút → xong trước 07:30.
     - cron: '0 22 * * *'
   workflow_dispatch: # Chạy tay: Actions → Daily 1Office sync → Run workflow
+    inputs:
+      only_cache:
+        description: 'Chỉ cập nhật cache web (bỏ qua sync, báo cáo và cảnh báo Lark) — dùng để thử'
+        type: boolean
+        default: false
 
 permissions:
   contents: write # chỉ dùng cho bước "giữ repo hoạt động" ở cuối
@@ -93,6 +98,7 @@ jobs:
 
       - name: Chạy sync
         id: sync
+        if: ${{ !inputs.only_cache }}
         run: |
           set -o pipefail
           python daily_morning_sync.py 2>&1 | tee "$RUNNER_TEMP/sync.log"
@@ -147,7 +153,7 @@ jobs:
       - name: Gửi báo cáo đơn lỗi Lark (sau khi sync xong)
         # Bot Render ngủ khi không có traffic → đánh thức bằng /health (thử tới ~3 phút) rồi mới POST.
         # Chỉ gửi khi sync không đỏ. Thiếu secret → cảnh báo, bỏ qua.
-        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        if: ${{ !cancelled() && !inputs.only_cache && steps.sync.outcome == 'success' }}
         env:
           BOT_URL: ${{ secrets.BOT_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -166,7 +172,7 @@ jobs:
 
       - name: Cảnh báo Lark khi sync lỗi
         # Job đỏ, hoặc có bước phụ (vd 3/6 danh sách đơn) thất bại nhưng job vẫn xanh.
-        if: ${{ always() }}
+        if: ${{ always() && !inputs.only_cache }}
         env:
           BOT_URL: ${{ secrets.BOT_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
