@@ -133,7 +133,9 @@ jobs:
           rm -f gcp-key.json
           git config user.name "Atino Auto Sync Bot"
           git config user.email "bot@atino.vn"
-          git add web_app/cache_*.json web_app/sync_status.json
+          # cache_*.json nằm trong .gitignore của repo work (chỉ vài file được force-add) →
+          # chỉ cập nhật các file đang được theo dõi, không add file bị ignore (sẽ báo lỗi).
+          git ls-files web_app | grep -E 'cache_.*[.]json$|sync_status[.]json$' | xargs git add
           if git diff --cached --quiet -- web_app/; then
             echo "Cache không đổi."
           else
