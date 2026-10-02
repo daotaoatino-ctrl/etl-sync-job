@@ -92,7 +92,10 @@ jobs:
           dbt deps --profiles-dir "$HOME/.dbt"
 
       - name: Chạy sync
-        run: python daily_morning_sync.py
+        id: sync
+        run: |
+          set -o pipefail
+          python daily_morning_sync.py 2>&1 | tee "$RUNNER_TEMP/sync.log"
 
       - name: Cập nhật cache cho web Vercel (repo private daotaoatino-ctrl/work)
         # Chạy cả khi bước sync báo đỏ (cache đọc từ BigQuery nên vẫn đúng với dữ liệu hiện có); bỏ qua nếu bị huỷ.
@@ -131,6 +134,51 @@ jobs:
             fi
             echo "Đã đẩy cache mới lên repo work → Vercel tự deploy."
           fi
+
+      - name: Gửi báo cáo đơn lỗi Lark (sau khi sync xong)
+        # Bot Render ngủ khi không có traffic → đánh thức bằng /health (thử tới ~3 phút) rồi mới POST.
+        # Chỉ gửi khi sync không đỏ. Thiếu secret → cảnh báo, bỏ qua.
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        env:
+          BOT_URL: ${{ secrets.BOT_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$BOT_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::warning::Thiếu secret BOT_URL/CRON_SECRET — bỏ qua gửi báo cáo Lark"
+            exit 0
+          fi
+          for i in 1 2 3 4 5 6; do
+            curl -fsS -m 40 -o /dev/null "$BOT_URL/health" && break
+            sleep 10
+          done
+          code=$(curl -sS -m 60 -o /dev/null -w '%{http_code}' -X POST -H "X-Cron-Token: $CRON_SECRET" "$BOT_URL/api/invalid-approvals")
+          echo "Bot trả HTTP $code"
+          [ "$code" = 202 ] || { echo "::error::Kích hoạt báo cáo Lark thất bại (HTTP $code)"; exit 1; }
+
+      - name: Cảnh báo Lark khi sync lỗi
+        # Job đỏ, hoặc có bước phụ (vd 3/6 danh sách đơn) thất bại nhưng job vẫn xanh.
+        if: ${{ always() }}
+        env:
+          BOT_URL: ${{ secrets.BOT_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          failed=$(grep "THẤT BẠI:" "$RUNNER_TEMP/sync.log" 2>/dev/null | sed -e 's/.*THẤT BẠI: //' -e 's/ sau [0-9.]*s.*//' | head -5)
+          if [ "$JOB_STATUS" = success ] && [ -z "$failed" ]; then exit 0; fi
+          if [ -z "$BOT_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::warning::Thiếu secret BOT_URL/CRON_SECRET — không gửi được cảnh báo Lark"
+            exit 0
+          fi
+          msg="Sync 1Office → BigQuery có lỗi (job: $JOB_STATUS)."
+          [ -n "$failed" ] && msg="$msg Bước lỗi: $(echo "$failed" | paste -sd ';' -)"
+          msg="$msg Chi tiết: $RUN_URL"
+          for i in 1 2 3 4 5 6; do
+            curl -fsS -m 40 -o /dev/null "$BOT_URL/health" && break
+            sleep 10
+          done
+          body=$(python3 -c 'import json,os,sys; print(json.dumps({"message": sys.argv[1]}))' "$msg")
+          curl -fsS -m 60 -X POST -H "X-Cron-Token: $CRON_SECRET" -H "Content-Type: application/json" -d "$body" "$BOT_URL/api/sync-alert" || echo "::warning::Gửi cảnh báo Lark thất bại"
 
       - name: Xoá key BigQuery
         if: always()
