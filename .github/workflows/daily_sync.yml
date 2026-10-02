@@ -114,6 +114,9 @@ jobs:
           umask 077
           # bỏ CR (nếu khóa được nạp từ Windows) và đảm bảo có xuống dòng cuối
           printf '%s\n' "$WORK_DEPLOY_KEY" | tr -d '\r' > "$RUNNER_TEMP/work_deploy_key"
+          # Chẩn đoán: in vân tay (công khai) của khóa; khóa có passphrase/sai định dạng thì báo rõ
+          ssh-keygen -y -P "" -f "$RUNNER_TEMP/work_deploy_key" 2>/dev/null | ssh-keygen -lf - \
+            || echo "::warning::WORK_DEPLOY_KEY không đọc được (có passphrase hoặc sai định dạng) — tạo lại khóa không passphrase"
           export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/work_deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
           trap 'rm -f "$RUNNER_TEMP/work_deploy_key"' EXIT
           git clone --depth 1 git@github.com:daotaoatino-ctrl/work.git "$RUNNER_TEMP/work"
