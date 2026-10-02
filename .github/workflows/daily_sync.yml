@@ -94,6 +94,44 @@ jobs:
       - name: Chạy sync
         run: python daily_morning_sync.py
 
+      - name: Cập nhật cache cho web Vercel (repo private daotaoatino-ctrl/work)
+        # Chạy cả khi bước sync báo đỏ (cache đọc từ BigQuery nên vẫn đúng với dữ liệu hiện có); bỏ qua nếu bị huỷ.
+        # Code web nằm ở repo private `work` nên checkout bằng PAT rồi chạy export tại đó,
+        # tránh đưa web_app lên repo public này. Thiếu secret WORK_REPO_PAT → cảnh báo, bỏ qua.
+        if: ${{ !cancelled() }}
+        env:
+          WORK_REPO_PAT: ${{ secrets.WORK_REPO_PAT }}
+          TZ: Asia/Ho_Chi_Minh   # sync_status.json ghi giờ VN, không phải UTC của runner
+        run: |
+          if [ -z "$WORK_REPO_PAT" ]; then
+            echo "::warning::Chưa có secret WORK_REPO_PAT — bỏ qua cập nhật cache Vercel"
+            exit 0
+          fi
+          git clone --depth 1 "https://x-access-token:${WORK_REPO_PAT}@github.com/daotaoatino-ctrl/work.git" "$RUNNER_TEMP/work"
+          cd "$RUNNER_TEMP/work"
+          pip install -r requirements.txt
+          cp "$GCP_KEY_PATH" gcp-key.json
+          python export_dashboard_cache.py
+          rm -f gcp-key.json
+          git config user.name "Atino Auto Sync Bot"
+          git config user.email "bot@atino.vn"
+          git add web_app/cache_*.json web_app/sync_status.json
+          if git diff --cached --quiet -- web_app/; then
+            echo "Cache không đổi."
+          else
+            git commit -m "chore(cache): tự động cập nhật cache Vercel ($(date '+%Y-%m-%d %H:%M'))"
+            pushed=0
+            for i in 1 2 3; do
+              if git pull --rebase -q origin main && git push origin HEAD:main; then pushed=1; break; fi
+              sleep 5
+            done
+            if [ "$pushed" != 1 ]; then
+              echo "::error::Không đẩy được cache lên repo work (kiểm tra quyền Contents: write của WORK_REPO_PAT)"
+              exit 1
+            fi
+            echo "Đã đẩy cache mới lên repo work → Vercel tự deploy."
+          fi
+
       - name: Xoá key BigQuery
         if: always()
         run: rm -f "$RUNNER_TEMP/gcp-key.json" "$HOME/.dbt/profiles.yml"
