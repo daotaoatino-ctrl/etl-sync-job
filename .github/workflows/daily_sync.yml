@@ -131,8 +131,9 @@ jobs:
           cp "$GCP_KEY_PATH" gcp-key.json
           python export_dashboard_cache.py
           rm -f gcp-key.json
-          git config user.name "Atino Auto Sync Bot"
-          git config user.email "bot@atino.vn"
+          # Vercel chỉ deploy commit của tác giả có quyền trong dự án (email lạ → "Deployment was blocked")
+          git config user.name "ATINO"
+          git config user.email "316510702+daotaoatino-ctrl@users.noreply.github.com"
           # cache_*.json nằm trong .gitignore của repo work (chỉ vài file được force-add) →
           # chỉ cập nhật các file đang được theo dõi, không add file bị ignore (sẽ báo lỗi).
           git ls-files web_app | grep -E 'cache_.*[.]json$|sync_status[.]json$' | xargs git add
