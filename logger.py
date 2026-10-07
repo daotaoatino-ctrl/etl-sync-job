@@ -12,6 +12,8 @@ Log files được ghi vào: ./logs/YYYY-MM-DD.log
 """
 
 import logging
+import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +29,28 @@ if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+
+# 1Office API nhận token qua query string → mọi lỗi requests (vd "Max retries
+# exceeded with url: ...?access_token=...") đều chứa token. Che trước khi ghi
+# log / gửi cảnh báo.
+_TOKEN_IN_URL = re.compile(r"((?:access_token|secret|token)=)[^&\s'\"]+", re.IGNORECASE)
+_SECRET_ENV_KEYS = ("OFFICE_ACCESS_TOKEN", "CRON_SECRET", "LARK_APP_SECRET")
+
+
+def redact(text) -> str:
+    """Che token/secret trong chuỗi (query string + giá trị env đã biết)."""
+    text = _TOKEN_IN_URL.sub(r"\1***", str(text))
+    for key in _SECRET_ENV_KEYS:
+        value = os.getenv(key, "").strip()
+        if len(value) >= 8:
+            text = text.replace(value, "***")
+    return text
+
+
+class RedactingFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record))
 
 
 def get_logger(script_name: str) -> logging.Logger:
@@ -46,7 +70,7 @@ def get_logger(script_name: str) -> logging.Logger:
         return logger
 
     # Format: [2026-07-30 07:32:15] [INFO ] [sync_approvals_list] Nội dung message
-    fmt = logging.Formatter(
+    fmt = RedactingFormatter(
         fmt="[%(asctime)s] [%(levelname)-5s] [%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
     )

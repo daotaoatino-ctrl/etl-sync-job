@@ -33,6 +33,8 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
+from logger import redact
+
 # Load .env nếu chưa load
 load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=False)
 
@@ -103,6 +105,7 @@ def notify_success(script_name: str, rows: int = 0, extra_info: str = "") -> Non
 
 def notify_failure(script_name: str, error: str, extra_info: str = "") -> None:
     """Gửi email cảnh báo pipeline thất bại."""
+    error, extra_info = redact(error), redact(extra_info)
     subject   = f"🚨 FAILED: {script_name}"
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
