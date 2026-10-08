@@ -51,15 +51,15 @@ class TestApprovalsListRetry(unittest.TestCase):
         self.mod.fetch_data_with_retry.retry.sleep = lambda seconds: None
 
     def test_explicit_timeouts(self):
-        self.assertEqual(self.mod.REQUEST_TIMEOUT, (10, 60))
+        self.assertEqual(self.mod.REQUEST_TIMEOUT, (10, 120))
 
-    def test_three_attempts_then_raise(self):
+    def test_four_attempts_then_raise(self):
         session = mock.Mock()
         session.get.side_effect = requests.exceptions.ReadTimeout("read timed out")
         with self.assertRaises(requests.exceptions.ReadTimeout):
             self.mod.fetch_data_with_retry(session, {"page": 1})
-        self.assertEqual(session.get.call_count, 3)
-        self.assertEqual(session.get.call_args.kwargs["timeout"], (10, 60))
+        self.assertEqual(session.get.call_count, 4)
+        self.assertEqual(session.get.call_args.kwargs["timeout"], (10, 120))
 
     def test_success_after_one_timeout(self):
         ok = mock.Mock(status_code=200)
@@ -70,11 +70,12 @@ class TestApprovalsListRetry(unittest.TestCase):
         self.assertEqual(self.mod.fetch_data_with_retry(session, {"page": 1}), {"data": [], "total_item": 0})
         self.assertEqual(session.get.call_count, 2)
 
-    def test_worst_case_under_four_minutes(self):
+    def test_worst_case_under_ten_minutes(self):
         connect, read = self.mod.REQUEST_TIMEOUT
         waits = self.mod.fetch_data_with_retry.retry.wait
-        max_wait = sum(min(20, max(5, 2 * 2 ** (n - 1))) for n in range(1, self.mod.MAX_ATTEMPTS))
-        self.assertLess(self.mod.MAX_ATTEMPTS * (connect + read) + max_wait, 4 * 60)
+        lo, hi = self.mod.RETRY_WAIT_MIN, self.mod.RETRY_WAIT_MAX
+        max_wait = sum(min(hi, max(lo, 5 * 2 ** (n - 1))) for n in range(1, self.mod.MAX_ATTEMPTS))
+        self.assertLess(self.mod.MAX_ATTEMPTS * (connect + read) + max_wait, 10 * 60)
         self.assertIsNotNone(waits)
 
 

@@ -6,7 +6,8 @@ import time
 import argparse
 from datetime import datetime, timedelta
 from google.cloud import bigquery
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
+import logging
 
 # ✅ Đọc credentials từ config.py (không hardcode)
 from config import ACCESS_TOKEN, APPROVAL_LIST_URL as API_URL, PROJECT_ID, DATASET_ID
@@ -20,16 +21,20 @@ DEFAULT_HEADERS = {
     "Accept": "application/json, text/plain, */*",
 }
 
-# Timeout rõ ràng + ít lần thử: 01/10 endpoint này treo, 5 lần × 90s + chờ = 12,4 phút
-# chỉ để thất bại. Giờ tệ nhất ~3,8 phút; Bước 5 (sync_realtime_poll) vẫn bù đơn mới.
-REQUEST_TIMEOUT = (10, 60)  # (connect, read) giây
-MAX_ATTEMPTS = 3
+# Timeout rõ ràng + giới hạn tổng thời gian: 01/10 endpoint này treo, 5 lần × 90s + chờ = 12,4 phút
+# chỉ để thất bại. 08/10 cả 3 lần × 60s đều timeout (192s) nên nới read lên 120s và 4 lần thử,
+# chờ giữa các lần dài hơn để 1Office kịp hồi. Tệ nhất ~9,5 phút; Bước 5 (sync_realtime_poll)
+# vẫn bù đơn mới nếu bước này vẫn thất bại.
+REQUEST_TIMEOUT = (10, 120)  # (connect, read) giây
+MAX_ATTEMPTS = 4
+RETRY_WAIT_MIN, RETRY_WAIT_MAX = 10, 30  # giây
 
 
 @retry(
     stop=stop_after_attempt(MAX_ATTEMPTS),
-    wait=wait_exponential(multiplier=2, min=5, max=20),
+    wait=wait_exponential(multiplier=5, min=RETRY_WAIT_MIN, max=RETRY_WAIT_MAX),
     retry=retry_if_exception_type((requests.exceptions.RequestException, ValueError)),
+    before_sleep=before_sleep_log(log, logging.WARNING),
     reraise=True
 )
 def fetch_data_with_retry(session, params):
