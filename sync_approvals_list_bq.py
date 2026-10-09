@@ -4,7 +4,7 @@ import sys
 import os
 import time
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from google.cloud import bigquery
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
 import logging
@@ -52,6 +52,46 @@ def fetch_data_with_retry(session, params):
 
 FULL_TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.RAW_1OFFICE_APPROVALS_LIST"
 
+# Smart Sync đọc đơn MỚI NHẤT TRƯỚC thay vì nhảy tới các trang cuối: 1Office mặc
+# định sắp tăng dần theo ID nên đơn mới nằm ở trang ~450, và trang sâu như vậy
+# thường treo > 120s (lỗi bước 3 gần như mỗi ngày từ 03/10). Sắp giảm dần theo
+# ngày tạo thì đơn mới nằm ở trang 1 (đo 09/10: trang cuối timeout > 150s,
+# trang 1 có sort chỉ ~1s).
+RECENT_SORT = {"sort_by": "date_created", "sort_type": "desc"}
+MAX_RECENT_PAGES = 100  # chặn vòng lặp nếu API trả dữ liệu bất thường
+VN_TZ = timezone(timedelta(hours=7))
+
+
+def parse_vn_date(value):
+    """'08/10/2026 11:19' -> date(2026, 10, 8); không đọc được -> None."""
+    try:
+        return datetime.strptime(str(value)[:10], "%d/%m/%Y").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_recent_items(session, days_back, limit=100, today=None):
+    """Tải đơn theo ngày tạo giảm dần, dừng sau trang có đơn cũ hơn mốc days_back."""
+    today = today or datetime.now(VN_TZ).date()
+    cutoff = today - timedelta(days=days_back)
+    all_items = []
+    for page in range(1, MAX_RECENT_PAGES + 1):
+        params = {"access_token": ACCESS_TOKEN, "limit": limit, "page": page, **RECENT_SORT}
+        items = fetch_data_with_retry(session, params).get("data", [])
+        if not items:
+            break
+        dates = [d for d in (parse_vn_date(it.get("date_created")) for it in items) if d]
+        if page == 1 and dates and max(dates) < cutoff:
+            # Trang 1 toàn đơn cũ = 1Office đã bỏ qua tham số sort -> báo lỗi thay vì
+            # âm thầm bỏ sót toàn bộ đơn mới.
+            raise ValueError(f"API khong sap xep theo ngay tao (trang 1 moi nhat {max(dates)}), kiem tra lai RECENT_SORT")
+        all_items.extend(items)
+        if dates and min(dates) < cutoff:
+            break
+        time.sleep(0.2)
+    log.info(f"  -> [Smart Daily Sync] Da tai {page} trang moi nhat (don tao tu {cutoff} tro lai day)")
+    return all_items
+
 def main():
     log_run_separator("sync_approvals_list", log)
     parser = argparse.ArgumentParser()
@@ -64,17 +104,15 @@ def main():
         session = requests.Session()
         limit = 100
 
-        # Lấy trang đầu tiên để biết tổng số items và pages
-        first_page_data = fetch_data_with_retry(session, {"access_token": ACCESS_TOKEN, "limit": limit, "page": 1})
-        total_item = first_page_data.get("total_item", 0)
-        total_pages = (total_item + limit - 1) // limit if limit else 1
-        log.info(f"  -> Tong so don tu tren 1Office: {total_item:,} ({total_pages} trang)")
-
-        all_items = []
-
         if args.full:
             # Mode toàn bộ: từ trang 1 đến hết
-            all_items.extend(first_page_data.get("data", []))
+            # Lấy trang đầu tiên để biết tổng số items và pages
+            first_page_data = fetch_data_with_retry(session, {"access_token": ACCESS_TOKEN, "limit": limit, "page": 1})
+            total_item = first_page_data.get("total_item", 0)
+            total_pages = (total_item + limit - 1) // limit if limit else 1
+            log.info(f"  -> Tong so don tu tren 1Office: {total_item:,} ({total_pages} trang)")
+
+            all_items = list(first_page_data.get("data", []))
             start_page = 2
             log.info(f"  -> Dang tai toan bo tu trang 2 den trang {total_pages}...")
             for page in range(start_page, total_pages + 1):
@@ -89,21 +127,9 @@ def main():
                 time.sleep(0.2)
             write_disp = bigquery.WriteDisposition.WRITE_TRUNCATE
         else:
-            # Mode nhanh hàng ngày (Smart Sync):
-            # 1Office sắp xếp đơn tăng dần theo ID (trang 1 là 2023, trang cuối là hôm nay 2026).
-            # Trong 30 ngày chỉ có khoảng 1.500 - 2.500 đơn (~25 trang cuối).
-            # Tải 25 trang cuối chỉ mất ~20-30 giây thay vì 80+ phút!
-            recent_pages_count = max(25, int(args.days_back * 1.5))
-            start_page = max(1, total_pages - recent_pages_count + 1)
-            log.info(f"  -> [Smart Daily Sync] Dang tai {total_pages - start_page + 1} trang cuoi (trang {start_page} -> {total_pages})...")
-            
-            for page in range(start_page, total_pages + 1):
-                params = {"access_token": ACCESS_TOKEN, "limit": limit, "page": page}
-                data = fetch_data_with_retry(session, params)
-                items = data.get("data", [])
-                if items:
-                    all_items.extend(items)
-                time.sleep(0.2)
+            # Mode nhanh hàng ngày (Smart Sync): chỉ đơn tạo trong --days-back ngày gần
+            # nhất, ghi nối thêm (mart khử trùng theo ID, giữ bản mới nhất).
+            all_items = fetch_recent_items(session, args.days_back, limit=limit)
             write_disp = bigquery.WriteDisposition.WRITE_APPEND
 
         log.info(f"-> Da thu thap duoc {len(all_items):,} don tu can nạp.")

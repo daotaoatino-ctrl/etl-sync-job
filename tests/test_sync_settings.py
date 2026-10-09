@@ -79,6 +79,44 @@ class TestApprovalsListRetry(unittest.TestCase):
         self.assertIsNotNone(waits)
 
 
+def page(*dates):
+    return {"data": [{"ID": i, "date_created": f"{d} 08:00"} for i, d in enumerate(dates)]}
+
+
+class TestApprovalsListRecent(unittest.TestCase):
+    def setUp(self):
+        self.mod = load("sync_approvals_list_bq")
+        self.today = datetime(2026, 10, 9).date()
+
+    def run_pages(self, pages, days_back=30):
+        with mock.patch.object(self.mod, "fetch_data_with_retry", side_effect=pages) as fetch,                 mock.patch.object(self.mod.time, "sleep"):
+            items = self.mod.fetch_recent_items(mock.Mock(), days_back, today=self.today)
+        return items, fetch
+
+    def test_newest_first_without_deep_pages(self):
+        # Trước đây đơn mới nằm ở trang ~450 (trang sâu hay treo > 120s)
+        items, fetch = self.run_pages([page("09/10/2026", "08/10/2026")] + [page()])
+        params = fetch.call_args_list[0].args[1]
+        self.assertEqual(params["page"], 1)
+        self.assertEqual((params["sort_by"], params["sort_type"]), ("date_created", "desc"))
+        self.assertEqual(len(items), 2)
+
+    def test_stops_after_page_older_than_cutoff(self):
+        pages = [page("09/10/2026", "20/09/2026"), page("15/09/2026", "05/09/2026"), page("01/09/2026")]
+        items, fetch = self.run_pages(pages, days_back=30)
+        self.assertEqual(fetch.call_count, 2)  # trang 2 đã có đơn trước 09/09 -> dừng
+        self.assertEqual(len(items), 4)
+
+    def test_raises_if_api_ignores_sort(self):
+        with self.assertRaises(ValueError):
+            self.run_pages([page("01/01/2023", "02/01/2023")])
+
+    def test_parse_vn_date(self):
+        self.assertEqual(self.mod.parse_vn_date("08/10/2026 11:19"), datetime(2026, 10, 8).date())
+        self.assertIsNone(self.mod.parse_vn_date(None))
+        self.assertIsNone(self.mod.parse_vn_date("abc"))
+
+
 class TestTimekeepStartDate(unittest.TestCase):
     def setUp(self):
         self.mod = load("sync_timekeep_bq")
