@@ -99,6 +99,11 @@ def main():
     # lại đơn mới/đổi trạng thái ngay trong cùng lần chạy — xem docstring của
     # sync_realtime_poll.py — nên lỗi ở đây không làm mất dữ liệu, chỉ cần cảnh báo.
     steps = [
+        # critical=False: chỉ là bảo trì. Dataset tự xoá bảng sau 60 ngày (Sandbox) — bảng nạp tay
+        # như RAW_HR_MASTER_DATA bị xoá làm 2 mart nhân sự đứng yên từ 25/09 (xem renew_tables.py).
+        ("0/7. Gia hạn các bảng RAW_* sắp hết hạn (BigQuery Sandbox tự xoá sau 60 ngày)",
+         f'"{py}" renew_tables.py', False),
+
         ("1/6. Kéo toàn bộ hồ sơ nhân sự (Biến động nhân sự) 1Office -> BigQuery",
          f'"{py}" sync_profile_bq.py', True),
 
