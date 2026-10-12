@@ -19,13 +19,19 @@ log = get_logger("sync_approval_details")
 FULL_TABLE_LIST_ID = f"{PROJECT_ID}.{DATASET_ID}.RAW_1OFFICE_APPROVALS_LIST"
 FULL_TABLE_DETAIL_ID = f"{PROJECT_ID}.{DATASET_ID}.RAW_1OFFICE_APPROVAL_DETAILS"
 
-def fetch_detail(approval_id):
+# Vòng đầu: 10 luồng, timeout 10s. Đơn lỗi mạng/timeout (đêm 12/10: 20/321 đơn, gồm 3 đơn OT) trước đây
+# bỏ luôn tới lần sync sau nên báo cáo đơn lỗi trên Lark không kiểm tra được giờ OT.
+# Các vòng thử lại: ít luồng hơn (đỡ làm 1Office quá tải), timeout dài hơn.
+RETRY_ROUNDS = [(3, 30), (2, 60)]  # (số luồng, timeout giây)
+
+
+def fetch_detail(approval_id, timeout=10):
     for attempt in range(3):
         try:
             resp = requests.get(
                 API_URL,
                 params={"access_token": ACCESS_TOKEN, "id": approval_id},
-                timeout=10
+                timeout=timeout
             )
             if resp.status_code == 429:
                 time.sleep(2 * (attempt + 1))
@@ -38,6 +44,33 @@ def fetch_detail(approval_id):
         except Exception:
             time.sleep(1)
     return approval_id, None
+
+def fetch_missing_details(ids, fetch=fetch_detail, rounds=RETRY_ROUNDS, workers=10, log_every=50):
+    """Tải chi tiết các đơn trong ids; đơn lỗi được thử lại theo `rounds`. Trả (kết quả {id: data}, ids còn lỗi)."""
+    results = {}
+    pending = list(ids)
+    plan = [(workers, None)] + list(rounds)
+    for round_no, (n_workers, timeout) in enumerate(plan):
+        if not pending:
+            break
+        if round_no:
+            log.info(f"  -> Thu lai {len(pending)} don loi (vong {round_no}, {n_workers} luong, timeout {timeout}s)")
+            time.sleep(5)
+        done = 0
+        total = len(pending)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+            call = (lambda aid: fetch(aid)) if timeout is None else (lambda aid: fetch(aid, timeout=timeout))
+            future_map = {executor.submit(call, aid): aid for aid in pending}
+            for future in concurrent.futures.as_completed(future_map):
+                aid, data = future.result()
+                if data:
+                    results[aid] = data
+                done += 1
+                if done % log_every == 0 or done == total:
+                    log.info(f"  Da tai: {done}/{total} (tong {len(results)} thanh cong)")
+        pending = [aid for aid in pending if aid not in results]
+    return results, pending
+
 
 def main():
     log_run_separator("sync_approval_details", log)
@@ -97,19 +130,10 @@ def main():
             return
 
         log.info(f"=== BUOC 3: Tai {len(missing)} chi tiet qua API (10 luong song song) ===")
-        results = {}
-        done = 0
         total = len(missing)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            future_map = {executor.submit(fetch_detail, aid): aid for aid in missing}
-            for future in concurrent.futures.as_completed(future_map):
-                aid, data = future.result()
-                if data:
-                    results[aid] = data
-                done += 1
-                if done % 50 == 0 or done == total:
-                    log.info(f"  Da tai: {done}/{total} ({len(results)} thanh cong)")
+        results, failed_ids = fetch_missing_details(missing)
+        if failed_ids:
+            log.warning(f"  -> Con {len(failed_ids)} don van loi sau khi thu lai: {sorted(failed_ids)[:20]} (se thu lai o lan sync sau)")
 
         log.info(f"  -> Tai xong: {len(results)}/{total} don tu")
 

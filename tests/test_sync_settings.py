@@ -23,6 +23,7 @@ def fake_deps():
     config.ACCESS_TOKEN = "fake"
     config.APPROVAL_LIST_URL = "https://example.invalid/approvals"
     config.TIMEKEEP_URL = "https://example.invalid/timekeep"
+    config.APPROVAL_DETAIL_URL = "https://example.invalid/approval-detail"
     config.PROJECT_ID, config.DATASET_ID = "proj", "ds"
     logger = types.ModuleType("logger")
     logger.get_logger = lambda name: mock.Mock()
