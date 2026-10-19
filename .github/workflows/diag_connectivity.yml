@@ -1,0 +1,60 @@
+name: Diag 1Office connectivity
+
+# Chẩn đoán mạng từ runner GitHub tới 1Office (chạy tay). KHÔNG đọc/ghi BigQuery, KHÔNG gửi Lark.
+# Repo PUBLIC → tên miền và IP của 1Office đều bị che trong log.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OFFICE_API_BASE_URL: ${{ secrets.OFFICE_API_BASE_URL }}
+    steps:
+      - name: Che tên miền và IP 1Office
+        run: |
+          host=$(python3 -c "import os; from urllib.parse import urlparse; print(urlparse(os.environ['OFFICE_API_BASE_URL']).hostname or '')")
+          [ -z "$host" ] && { echo "::error::Thiếu OFFICE_API_BASE_URL"; exit 1; }
+          echo "::add-mask::$host"
+          echo "OFFICE_HOST=$host" >> "$GITHUB_ENV"
+          for ip in $(getent ahosts "$host" | awk '{print $1}' | sort -u); do echo "::add-mask::$ip"; done
+
+      - name: Thông tin runner
+        run: |
+          echo "Runner IP công khai: $(curl -s -m 10 https://api.ipify.org || echo '?')"
+          curl -s -m 10 https://ipinfo.io/json | python3 -c "import sys,json; d=json.load(sys.stdin); print({k:d.get(k) for k in ('country','region','city','org')})" || true
+          date -u
+
+      - name: DNS
+        run: |
+          echo "Số địa chỉ phân giải được: $(getent ahosts "$OFFICE_HOST" | awk '{print $1}' | sort -u | wc -l)"
+
+      - name: TCP 443 và 80 tới 1Office (5 lần mỗi cổng)
+        run: |
+          for port in 443 80; do
+            for i in 1 2 3 4 5; do
+              if timeout 8 bash -c "exec 3<>/dev/tcp/$OFFICE_HOST/$port" 2>/dev/null; then r=OK; else r=TIMEOUT/REFUSED; fi
+              echo "cổng $port lần $i: $r"
+            done
+          done
+
+      - name: curl chi tiết tới 1Office
+        run: |
+          for i in 1 2 3; do
+            curl -sS -o /dev/null -m 20 -w "lần $i: http=%{http_code} dns=%{time_namelookup}s connect=%{time_connect}s tls=%{time_appconnect}s total=%{time_total}s\n" "https://$OFFICE_HOST/" 2>&1 | sed "s/$OFFICE_HOST/[host]/g" || true
+          done
+
+      - name: Đối chứng (site Việt Nam và site quốc tế)
+        run: |
+          for u in https://vnexpress.net https://www.google.com https://github.com; do
+            curl -sS -o /dev/null -m 15 -w "$u: http=%{http_code} connect=%{time_connect}s total=%{time_total}s\n" "$u" 2>&1 || true
+          done
+
+      - name: Đường đi (traceroute tới 1Office)
+        run: |
+          sudo apt-get install -y -qq traceroute >/dev/null 2>&1 || true
+          timeout 90 traceroute -T -p 443 -m 20 -w 2 "$OFFICE_HOST" 2>&1 | sed "s/$OFFICE_HOST/[host]/g" || true
