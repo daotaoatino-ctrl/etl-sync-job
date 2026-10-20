@@ -233,10 +233,15 @@ final as (
             WHEN LOWER(e.approval_type) LIKE '%nghỉ%' OR LOWER(e.approval_type) LIKE '%phép%' THEN 'Đơn xin nghỉ'
             ELSE 'Đơn khác'
         END as approval_type,
-        COALESCE(al.app_approval_status, 'Không xác định') as approval_status,
+        -- Bảng chi tiết cập nhật mới hơn bảng danh sách (danh sách có thể còn "Chờ duyệt" cũ dù đơn đã duyệt).
+        -- Trạng thái chỉ đi tiếp → trạng thái khác "Chờ duyệt" (từ chi tiết hoặc danh sách) luôn thắng.
+        CASE
+            WHEN dd.app_approval_status IS NOT NULL AND dd.app_approval_status != 'Chờ duyệt' THEN dd.app_approval_status
+            ELSE COALESCE(al.app_approval_status, dd.app_approval_status, 'Không xác định')
+        END                                     as approval_status,
         COALESCE(al.date_created, e.date_record) as date_created,
         al.time_created                         as time_created,
-        al.date_approve                         as date_approved,
+        COALESCE(al.date_approve, dd.date_approve) as date_approved,
         al.time_approve                         as time_approved,
         al.app_approval_current_id              as approver_name,
 
@@ -265,6 +270,7 @@ final as (
 
     from all_events e
     left join approvals_list al on e.approval_id = al.ID
+    left join details dd on e.approval_id = dd.ID
     left join profiles p on e.personnel_code = p.code
     where e.personnel_code is not null
     

@@ -53,5 +53,10 @@ flattened as (
 
 select * from flattened
 where personnel_code is not null and personnel_code != ''
--- Giữ bản ghi mới nhất theo sync_time cho mỗi đơn
-qualify row_number() over (partition by ID order by sync_time desc) = 1
+-- RAW lưu nhiều bản chụp mỗi đơn và sync_time có thể để trống → "mới nhất" không xác định được.
+-- Trạng thái chỉ đi tiếp (Chờ duyệt → Đã duyệt/Không duyệt) nên ưu tiên bản chụp đã qua "Chờ duyệt",
+-- rồi mới đến sync_time mới nhất.
+qualify row_number() over (
+    partition by ID
+    order by (coalesce(app_approval_status, 'Chờ duyệt') = 'Chờ duyệt') asc, sync_time desc
+) = 1
