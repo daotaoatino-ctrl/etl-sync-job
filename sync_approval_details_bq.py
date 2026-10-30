@@ -25,6 +25,30 @@ FULL_TABLE_DETAIL_ID = f"{PROJECT_ID}.{DATASET_ID}.RAW_1OFFICE_APPROVAL_DETAILS"
 RETRY_ROUNDS = [(3, 30), (2, 60)]  # (số luồng, timeout giây)
 
 
+# Đơn còn "Chờ duyệt" trong danh sách (chưa bản chụp nào khác trạng thái đó), tạo trước from_date,
+# chưa có chi tiết nào ghi đã duyệt/từ chối và chưa bị đánh dấu đã xoá ("Post not found").
+STALE_PENDING_SQL = """
+    WITH list AS (
+        SELECT CAST(JSON_VALUE(v, '$.ID') AS INT64) AS approval_id,
+               LOGICAL_OR(JSON_VALUE(v, '$.app_approval_status') != 'Chờ duyệt') AS moved_on,
+               MIN(SAFE.PARSE_DATE('%d/%m/%Y', JSON_VALUE(v, '$.date_created'))) AS created
+        FROM `{list_table}`, UNNEST(JSON_QUERY_ARRAY(RAW_DATA, '$.data')) AS v
+        WHERE JSON_VALUE(v, '$.ID') IS NOT NULL
+        GROUP BY approval_id
+    ),
+    settled AS (
+        SELECT DISTINCT APPROVAL_ID
+        FROM `{detail_table}`
+        WHERE JSON_VALUE(RAW_DATA, '$.message') = 'Post not found'
+           OR IFNULL(JSON_VALUE(RAW_DATA, '$.data.app_approval_status') != 'Chờ duyệt', FALSE)
+    )
+    SELECT l.approval_id
+    FROM list l
+    LEFT JOIN settled s ON s.APPROVAL_ID = l.approval_id
+    WHERE NOT IFNULL(l.moved_on, FALSE) AND l.created < DATE('{from_date}') AND s.APPROVAL_ID IS NULL
+"""
+
+
 def fetch_detail(approval_id, timeout=10):
     for attempt in range(3):
         try:
@@ -117,11 +141,21 @@ def main():
 
         log.info(f"  -> Tim thay {len(all_ids)} don tu trong {args.days_back} ngay gan nhat")
 
+        # Đơn "Chờ duyệt" cũ hơn cửa sổ trên: sync danh sách chỉ tải ~25 trang cuối nên không ai
+        # làm mới chúng — duyệt/xoá trên 1Office sau đó BigQuery không biết. Tải lại chi tiết để bắt kịp.
+        stale_pending = set()
+        try:
+            stale_pending = {row.approval_id for row in client.query(STALE_PENDING_SQL.format(
+                list_table=FULL_TABLE_LIST_ID, detail_table=FULL_TABLE_DETAIL_ID, from_date=from_date)).result()}
+        except Exception as e:
+            log.warning(f"Khong the lay danh sach don cho duyet cu: {e}")
+        log.info(f"  -> Don cho duyet cu hon {args.days_back} ngay can kiem tra lai: {len(stale_pending)}")
+
         # BỎ LOGIC TRỪ ĐI synced_ids:
         # Luôn luôn tải lại toàn bộ đơn trong khoảng thời gian (VD: 7 ngày)
         # để cập nhật các đơn vừa chuyển trạng thái (VD: Chờ duyệt -> Đã duyệt).
         # dbt (stg_approval_details) sẽ tự động dedup lấy bản ghi mới nhất theo SYNC_TIME.
-        missing = list(all_ids)
+        missing = list(all_ids | stale_pending)
         log.info(f"  -> Se tai moi/cap nhat lai: {len(missing)} don tu")
 
         if not missing:
