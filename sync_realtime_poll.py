@@ -308,7 +308,10 @@ def main():
 
         # Rebuild dbt SAU khi da nha khoa (khong giu khoa lau, dbt build khong dung RAW_1OFFICE_APPROVAL_DETAILS
         # theo kieu ghi - chi doc qua stg view, an toan de chay ngoai pham vi khoa)
-        rebuild_compliance_marts()
+        if "--no-dbt" not in sys.argv:
+            rebuild_compliance_marts()
+        else:
+            log.info("  [--no-dbt] Bo qua rebuild dbt (daily_morning_sync buoc 6 se rebuild toan bo).")
 
         # Cập nhật trạng thái đồng bộ lên web và làm mới cache
         update_web_sync_status(len(new_records), len(updated_records))

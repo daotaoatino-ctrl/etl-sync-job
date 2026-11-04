@@ -2,10 +2,11 @@ name: Daily 1Office sync
 
 on:
   schedule:
-    # 05:00 giờ Việt Nam (22:00 UTC hôm trước). GitHub có thể trễ tới ~1 giờ,
-    # một lần sync mất ~15 phút → xong trước 07:30. Báo cáo Lark gửi riêng lúc 09:00
-    # bằng cron-job.org (POST /api/invalid-approvals của bot) — workflow này chỉ đồng bộ dữ liệu.
-    - cron: '0 22 * * *'
+    # 02:27 sáng VN (19:27 UTC hôm trước). Chọn phút lẻ (27) và khung giờ ít nghẽn (19h UTC)
+    # để tránh hàng đợi GitHub Actions quá tải; kể cả bị trễ 1-2 tiếng thì vẫn hoàn thành trước 06:00 VN.
+    - cron: '27 19 * * *'
+    # Ca trưa: 11:47 trưa VN (04:47 UTC) để đồng bộ bổ sung trước giờ nghỉ trưa.
+    - cron: '47 4 * * *'
   workflow_dispatch: # Chạy tay: Actions → Daily 1Office sync → Run workflow
 
 permissions:
